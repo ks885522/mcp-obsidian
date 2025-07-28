@@ -1,93 +1,53 @@
-import json
+
 import logging
-from collections.abc import Sequence
-from functools import lru_cache
-from typing import Any
+import argparse
 import os
 from dotenv import load_dotenv
-from mcp.server import Server
-from mcp.types import (
-    Tool,
-    TextContent,
-    ImageContent,
-    EmbeddedResource,
-)
-
-load_dotenv()
+from fastmcp import FastMCP
 
 from . import tools
-
-# Load environment variables
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("mcp-obsidian")
 
-api_key = os.getenv("OBSIDIAN_API_KEY")
-if not api_key:
-    raise ValueError(f"OBSIDIAN_API_KEY environment variable required. Working directory: {os.getcwd()}")
+# Create the FastMCP application instance
+app = FastMCP("mcp-obsidian")
 
-app = Server("mcp-obsidian")
+# Register all the tool functions defined in tools.py
+tools.register_tools(app)
 
-tool_handlers = {}
-def add_tool_handler(tool_class: tools.ToolHandler):
-    global tool_handlers
+def main():
+    """
+    This is the main entry point for the server, executed when you run `mcp-obsidian`.
+    It parses command-line arguments to decide which transport to use.
+    """
+    parser = argparse.ArgumentParser(description="MCP Obsidian Server")
+    parser.add_argument(
+        "--transport",
+        type=str,
+        default="stdio",
+        choices=["stdio", "sse", "streamable-http"],
+        help="The transport protocol to use.",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="The port to use for network transports.",
+    )
+    parser.add_argument(
+        "--host",
+        type=str,
+        default="127.0.0.1",
+        help="The host to bind to for network transports.",
+    )
+    args = parser.parse_args()
 
-    tool_handlers[tool_class.name] = tool_class
+    # Load environment variables from a .env file in the current directory
+    load_dotenv()
+    logger.info("Attempting to load .env file from current directory.")
 
-def get_tool_handler(name: str) -> tools.ToolHandler | None:
-    if name not in tool_handlers:
-        return None
+    logger.info(f"Starting MCP Obsidian Server in '{args.transport}' mode")
     
-    return tool_handlers[name]
-
-add_tool_handler(tools.ListFilesInDirToolHandler())
-add_tool_handler(tools.ListFilesInVaultToolHandler())
-add_tool_handler(tools.GetFileContentsToolHandler())
-add_tool_handler(tools.SearchToolHandler())
-add_tool_handler(tools.PatchContentToolHandler())
-add_tool_handler(tools.AppendContentToolHandler())
-add_tool_handler(tools.PutContentToolHandler())
-add_tool_handler(tools.DeleteFileToolHandler())
-add_tool_handler(tools.ComplexSearchToolHandler())
-add_tool_handler(tools.BatchGetFileContentsToolHandler())
-add_tool_handler(tools.PeriodicNotesToolHandler())
-add_tool_handler(tools.RecentPeriodicNotesToolHandler())
-add_tool_handler(tools.RecentChangesToolHandler())
-
-@app.list_tools()
-async def list_tools() -> list[Tool]:
-    """List available tools."""
-
-    return [th.get_tool_description() for th in tool_handlers.values()]
-
-@app.call_tool()
-async def call_tool(name: str, arguments: Any) -> Sequence[TextContent | ImageContent | EmbeddedResource]:
-    """Handle tool calls for command line run."""
-    
-    if not isinstance(arguments, dict):
-        raise RuntimeError("arguments must be dictionary")
-
-
-    tool_handler = get_tool_handler(name)
-    if not tool_handler:
-        raise ValueError(f"Unknown tool: {name}")
-
-    try:
-        return tool_handler.run_tool(arguments)
-    except Exception as e:
-        logger.error(str(e))
-        raise RuntimeError(f"Caught Exception. Error: {str(e)}")
-
-
-async def main():
-
-    # Import here to avoid issues with event loops
-    from mcp.server.stdio import stdio_server
-
-    async with stdio_server() as (read_stream, write_stream):
-        await app.run(
-            read_stream,
-            write_stream,
-            app.create_initialization_options()
-        )
+    app.run(transport=args.transport, port=args.port, host=args.host)
